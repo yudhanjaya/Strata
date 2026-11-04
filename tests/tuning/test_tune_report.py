@@ -67,6 +67,10 @@ class ReportTest(unittest.TestCase):
         self.assertNotIn("--allow-small-differences", tune_report.render(r))
         self.assertFalse(tune_report.unlockable(r).get("placement"))
 
+    def test_a_setting_left_out_for_time_is_named(self):
+        r = {"code": "already_fastest", "skipped": [{"id": "trim_stage", "label": "Trim stage weights on two cards", "reason": "x", "kind": "time"}]}
+        self.assertIn("Left out to stay inside the time you chose: Trim stage weights on two cards", tune_report.render(r))
+
     def test_every_ending_has_a_next_step(self):
         endings = [
             {"code": "faster"}, {"code": "already_fastest"}, {"code": "stopped"},

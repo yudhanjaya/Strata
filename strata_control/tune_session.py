@@ -383,10 +383,10 @@ class WorkerEngine:
     def _from_engine_log(self, status: str, why: str) -> tuple[str, str]:
         """The worker says only that the engine stopped (and guesses at RAM). What the engine itself logged before it did is the
         reason: an out-of-memory in its log makes this an OOM, with the engine's own advice, so the report points at the right memory."""
-        if status != "FAIL_BOOT" or self.proc.poll() is None:
-            return status, why
+        if status != "FAIL_BOOT":
+            return status, why                 # the worker stays up and restarts the engine, so it is the log, not the worker's exit, that tells
         tail = self.log_text()[-8000:]
-        kind, reason = failure_kind(tail, self.proc.poll())
+        kind, reason = failure_kind(tail, None)
         if kind != "OOM":
             return status, why
         hint = engine_advice(self.log_text())

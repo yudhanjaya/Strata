@@ -333,6 +333,13 @@ def auto(a: argparse.Namespace) -> int:
             and backend in ("cuda", "hip") and (flags is None or "--vram-reserve-mib" in flags):
         base_args += ["--vram-reserve-mib", str(reserve)]
         ctx.base_args = list(base_args)
+    pre_notes: list[str] = []
+    if goal == "room" and reserve and "--vram-reserve-mib" not in base_args:
+        pre_notes.append(f"You asked to leave {reserve} MiB of graphics memory free, but it was not applied: the tuner adds "
+                         "--vram-reserve-mib only when this engine's --help lists it (it does not here). Put '--vram-reserve-mib "
+                         f"{reserve}' in the setup's arguments yourself to have it.")
+        if not machine:
+            print("note: " + pre_notes[0], file=sys.stderr, flush=True)
 
     if a.plan:
         return _plan_only(a, cfg, ctx, opts, bad, machine)
@@ -374,6 +381,7 @@ def auto(a: argparse.Namespace) -> int:
         result.message = f"The tuner stopped because of an error ({type(e).__name__}: {e}). Your settings were not changed."
     finally:
         _restore_signals(previous_handlers)
+    result.notes.extend(pre_notes)
     if result.outcome in ("base_failed", "failed") and not a.work_dir:
         _keep_logs(workdir, result)
     out = result.to_dict()

@@ -182,8 +182,12 @@ class EngineLogCrashTest(unittest.TestCase):
         self.assertEqual(self.engine("strata serve: ready\n", -6)._from_engine_log("FAIL_BOOT", "the engine crashed"),
                          ("FAIL_BOOT", "the engine crashed"))
 
-    def test_a_running_engine_is_not_judged_by_its_log(self):
-        self.assertEqual(self.engine(self.LOG, None)._from_engine_log("FAIL_BOOT", "x")[0], "FAIL_BOOT")
+    def test_the_worker_stays_up_after_the_engine_dies_so_the_log_decides(self):
+        # the worker (serve.server) is still running when its engine has crashed: it restarts the engine on the next request
+        self.assertEqual(self.engine(self.LOG, None)._from_engine_log("FAIL_BOOT", "x")[0], "OOM")
+
+    def test_only_a_crash_is_reread_from_the_log(self):
+        self.assertEqual(self.engine(self.LOG, None)._from_engine_log("NO_TOKENS", "busy"), ("NO_TOKENS", "busy"))
 
     def test_the_advice_is_read_from_the_log(self):
         from strata_control.tune_session import engine_advice

@@ -131,7 +131,8 @@ def render(r: dict[str, Any], *, preset_name: str | None = None) -> str:
         for s in skipped:
             lines.append(f"  {s.get('label') or s.get('id')}: {short.get(s.get('kind'), s.get('reason'))}")
         if timed:
-            lines.append(f"  {len(timed)} more, to stay inside the time you chose (use --mode thorough or --time to try them)")
+            lines.append("  Left out to stay inside the time you chose: " + ", ".join(x.get("label") or x.get("id") for x in timed)
+                         + " (use --mode thorough or --time to try " + ("it)" if len(timed) == 1 else "them)"))
     un = unlockable(r)
     if un.get("placement"):
         lines.append(f"  -> {len(un['placement'])} could be tried if you allow slightly different answers (--allow-small-differences).")
@@ -177,7 +178,8 @@ def render_plan(plan: dict[str, Any], pc: dict[str, Any] | None = None) -> str:
         short = {"placement": "can change answers slightly", "nonrepeatable": "answers would not repeat run to run"}
         lines += [f"  {x.get('label') or x.get('id')}: {short.get(x.get('kind'), x.get('reason'))}" for x in skipped]
         if timed:
-            lines.append(f"  {len(timed)} more, to stay inside the time (use --mode thorough or --time)")
+            lines.append("  Left out to stay inside the time: " + ", ".join(x.get("label") or x.get("id") for x in timed)
+                         + " (use --mode thorough or --time)")
         un = unlockable({"skipped": plan.get("will_skip")})
         if un.get("placement"):
             lines.append(f"  -> {len(un['placement'])} would be tried with --allow-small-differences.")
