@@ -48,6 +48,31 @@ def add_tune_auto(tune_sp: argparse._SubParsersAction) -> None:
     p.add_argument("--output", choices=("human", "json"), default="human")
 
 
+def add_tune_report(tune_sp: argparse._SubParsersAction) -> None:
+    p = tune_sp.add_parser("report", help="print the account of a finished tune: what was measured, tried and left out, and what to do next",
+                           description="Prints the newest saved tuning report, or the one whose file name contains REF (or a path). "
+                                       "--markdown gives text to paste into a [Benchmark] issue; it holds no paths or keys.")
+    p.add_argument("ref", nargs="?", default=None, help="part of a report's file name (default: the newest)")
+    p.add_argument("--list", action="store_true", help="list the saved reports instead")
+    p.add_argument("--markdown", action="store_true", help="the report as Markdown")
+    p.add_argument("--output", choices=("human", "json"), default="human")
+
+
+def report(a: argparse.Namespace) -> int:
+    from strata_control import tune_report
+
+    machine = a.output == "json"
+    if a.list:
+        items = [str(x) for x in tune_report.list_reports()]
+        return _print({"reports": items}, machine, "\n".join(items) or "No tuning reports saved yet.")
+    try:
+        path, data = tune_report.load(a.ref)
+    except (OSError, ValueError) as e:
+        return _fail(str(e), 2, machine)
+    text = data.get("markdown") if a.markdown else data.get("text")
+    return _print({"path": str(path), "report": data}, machine, f"{text}\n\n({path})" if not a.markdown else text)
+
+
 def add_presets(sp: argparse._SubParsersAction) -> None:
     pr = sp.add_parser("presets", help="saved tuning presets: list, apply, rename, delete, undo, re-check")
     psp = pr.add_subparsers(dest="presets_command", required=True)
@@ -148,6 +173,20 @@ def _parse_goal(text: str) -> tuple[str, int]:
     raise ValueError("goal is speed, room or room:MiB")
 
 
+def _progress_detail(p: dict[str, Any]) -> str:
+    """` - run 3 of 11; your settings 88.5 tok/s, last 91.0 tok/s`: where the tune is and what it has measured so far."""
+    bits = []
+    if p.get("runs_planned"):
+        bits.append(f"run {min(p.get('runs_done', 0) + 1, p['runs_planned'])} of about {p['runs_planned']}")
+    speeds = p.get("speeds") or []
+    base = next((x for x in speeds if x.get("label") == "base"), None)
+    if base:
+        bits.append(f"your settings {base['tok_s']} tok/s")
+    if speeds and speeds[-1] is not base:
+        bits.append(f"last: {speeds[-1].get('label')} {speeds[-1].get('tok_s')} tok/s")
+    return " - " + "; ".join(bits) if bits else ""
+
+
 def _stop_on_signals() -> dict[int, Any]:
     """Treat a terminated or hung-up terminal like Ctrl+C, so the run stops its engine and writes a result instead of
     vanishing. Only the main thread can set handlers; elsewhere this does nothing."""
@@ -243,7 +282,8 @@ def auto(a: argparse.Namespace) -> int:
         state["text"] = (f"Finding the fastest settings for your PC… {minutes_text(p.get('eta_s'))}"
                          if p.get("eta_s") is not None else "Finding the fastest settings for your PC…")
         _write_status(a.status_file, state)
-        say(f"[{p.get('elapsed_s', 0) // 60:>3d}m] {p['message']}" + (f"  ({minutes_text(p['eta_s'])})" if p.get("eta_s") else ""))
+        say(f"[{p.get('elapsed_s', 0) // 60:>3d}m] {p['message']}" + _progress_detail(p)
+            + (f"  ({minutes_text(p['eta_s'])})" if p.get("eta_s") else ""))
 
     workdir = Path(a.work_dir) if a.work_dir else Path(tempfile.mkdtemp(prefix="strata-tune-"))
     if not a.work_dir:
@@ -295,12 +335,21 @@ def auto(a: argparse.Namespace) -> int:
     autotune.Tuner.finalize(result)
     out.update({"code": result.code, "reason_code": result.reason_code, "values": result.values})
     out["values"]["preset_name"] = saved["name"] if saved else None
+    from strata_control import tune_report
+    model_name = presets.choices_from_config(cfg).get("model")
+    report_path = tune_report.save(out, target=a.target, model=model_name if isinstance(model_name, str) else None)
+    out["report"] = str(report_path) if report_path else None
     state.update({"state": "done", "result": out, "stage": "done"})
     _write_status(a.status_file, state)
     if machine:
         print(json.dumps({"schema_version": 1, "ok": True, "result": out}, ensure_ascii=False, default=str))
     else:
         print(_human_result(out, saved))
+        account = tune_report.render(out, preset_name=saved["name"] if saved else None)
+        if account:
+            print("\n" + account)
+        if report_path:
+            print(f"\nFull report: {report_path}  (print it again with 'strata tune report')")
     return {"improved": 0, "default_confirmed": 0, "cancelled": 130}.get(result.outcome, 6)
 
 

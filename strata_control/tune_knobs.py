@@ -412,8 +412,8 @@ def plan_arms(ctx: Context, *, mode: str = "quick", history_bad: set[str] | None
                 continue
             seen.add(arm.id)
 
-            def skip(reason: str) -> None:
-                skipped.append({"id": arm.id, "label": arm.label, "reason": reason})
+            def skip(reason: str, kind: str = "") -> None:
+                skipped.append({"id": arm.id, "label": arm.label, "reason": reason, **({"kind": kind} if kind else {})})
 
             if ctx.family not in arm.families:
                 continue
@@ -429,7 +429,8 @@ def plan_arms(ctx: Context, *, mode: str = "quick", history_bad: set[str] | None
             if not allowed(arm.answer, ctx):
                 skip({"placement": "it can change answers slightly; tick 'allow small answer differences' to try it",
                       "nonrepeatable": "answers would not repeat run to run; tick 'allow settings that are not repeatable' to try it",
-                      "quality": "it is a quality setting, never chosen automatically"}.get(arm.answer, "not allowed"))
+                      "quality": "it is a quality setting, never chosen automatically"}.get(arm.answer, "not allowed"),
+                     kind=arm.answer if arm.answer in ("placement", "nonrepeatable") else "")
                 continue
             miss = [n for n in arm.needs if not condition_holds(n, ctx)]
             if miss:

@@ -175,6 +175,20 @@ def is_win(ratios: list[float], pp_ratios: list[float], *, threshold: float, nee
     return True
 
 
+def why_not_a_win(ratios: list[float], pp_ratios: list[float], *, threshold: float, rounds: int) -> str:
+    """The plain reason a measured setting was not kept (the counterpart of `is_win`, for the report)."""
+    if len(ratios) < rounds:
+        return f"measured in {len(ratios)} of {rounds} rounds, not enough to compare"
+    gain = 100 * (statistics.median(ratios) - 1.0)
+    need = 100 * (threshold - 1.0)
+    if gain >= need and pp_ratios and statistics.median(pp_ratios) < 0.98:
+        return f"{gain:+.1f}% on answers but prompts got {100 * (1.0 - statistics.median(pp_ratios)):.0f}% slower"
+    if gain >= need:
+        faster = sum(1 for x in ratios if x > 1.0)
+        return f"{gain:+.1f}% against your settings, but only faster in {faster} of {len(ratios)} rounds"
+    return f"{gain:+.1f}% against your settings; it needed {need:+.1f}% to count"
+
+
 def rotate(items: list[Any], r: int) -> list[Any]:
     k = r % len(items) if items else 0
     return items[k:] + items[:k]
@@ -431,7 +445,7 @@ class Tuner:
             fixed = (per_arm - 1) + 1                      # extra base rounds, the final base
             n_arms = min(len(planned), max(0, (left - fixed) // per_arm))
         for p in planned[n_arms:]:
-            skipped.append({"id": p.arm.id, "label": p.arm.label, "reason": "left out to stay inside the time you chose"})
+            skipped.append({"id": p.arm.id, "label": p.arm.label, "reason": "left out to stay inside the time you chose", "kind": "time"})
         planned = planned[:n_arms]
         arms = [ArmReport(p.arm.id, p.arm.label, dict(p.args), dict(p.env), p.arm.answer) for p in planned]
         by_id = {a.id: a for a in arms}
@@ -531,6 +545,7 @@ class Tuner:
         r.noise = {"aa_gap": round(aa, 4), "drift": round(drift, 4), "spread": round(spread, 4),
                    "base_runs": [round(x, 2) for x in mb], "noisy": spread > STAGE_GAP_NOISY}
         threshold = accept_threshold(o.margin, aa, drift)
+        r.noise["threshold_pct"] = round(100 * (threshold - 1.0), 1)     # what a setting had to gain to count (for the report)
 
         # ---- evaluate the candidates
         winners: list[ArmReport] = []
@@ -562,6 +577,8 @@ class Tuner:
             if len(ratios) >= per_arm and is_win(ratios, pps, threshold=threshold):
                 rep.won = True
                 winners.append(rep)
+            else:
+                rep.reason = why_not_a_win(ratios, pps, threshold=threshold, rounds=per_arm)
         r.arms = [a.to_dict() for a in arms]
 
         if r.noise["noisy"] and not winners:
