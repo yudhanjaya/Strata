@@ -177,6 +177,18 @@ def _parse_goal(text: str) -> tuple[str, int]:
     raise ValueError("goal is speed, room or room:MiB")
 
 
+def _keep_logs(workdir: Path, result: Any) -> None:
+    """A tune that failed leaves the engine and worker logs of its runs, which is where the reason is. The run configurations
+    (they hold the run's API key) are removed; the logs are what the person needs and what a bug report asks for."""
+    atexit.unregister(shutil.rmtree)
+    for f in workdir.glob("run-*.json"):
+        try:
+            f.unlink()
+        except OSError:
+            pass
+    result.notes.append(f"The engine and worker logs of this run were kept in {workdir}")
+
+
 def _progress_detail(p: dict[str, Any]) -> str:
     """` - run 3 of 11; your settings 88.5 tok/s, last 91.0 tok/s`: where the tune is and what it has measured so far."""
     bits = []
@@ -360,11 +372,10 @@ def auto(a: argparse.Namespace) -> int:
         result = tuner.result
         result.outcome, result.reason_code = "failed", "tuner_error"
         result.message = f"The tuner stopped because of an error ({type(e).__name__}: {e}). Your settings were not changed."
-        if not a.work_dir:
-            atexit.unregister(shutil.rmtree)                 # keep the engine and worker logs of a run that failed
-            result.notes.append(f"The engine and worker logs of this run are in {workdir}")
     finally:
         _restore_signals(previous_handlers)
+    if result.outcome in ("base_failed", "failed") and not a.work_dir:
+        _keep_logs(workdir, result)
     out = result.to_dict()
     choices = presets.choices_from_config(cfg, use=a.use)
     choices["goal"], choices["reserve_mib"] = goal, reserve

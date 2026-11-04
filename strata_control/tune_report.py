@@ -79,7 +79,8 @@ def next_step(r: dict[str, Any], preset_name: str | None = None) -> str:
                     reason, "Tune again when the PC is idle.")
     if code == "failed":
         return {"no_memory": "Close other programs, or lower the context, or raise --vram-reserve-mib, and tune again.",
-                "start_failed": "Check that the model starts with 'strata launch', then tune again. The engine log of the run says why it did not.",
+                "start_failed": "Check that the model starts with 'strata launch', then tune again. The engine log of the run, kept for a failed tune "
+                                "(see the notes), says why it did not.",
                 "tuner_error": "Nothing was changed. The run's logs were kept (see the notes); please include them if you report this."}.get(
                     reason, "Nothing was changed. Check the engine log of the run.")
     if code == "stopped":

@@ -136,7 +136,7 @@ def failure_kind(text: str, returncode: int | None) -> tuple[str, str]:
     low = text.lower()
     lines = [ln.strip() for ln in text.splitlines()
              if re.search(r"unknown argument|unrecognized|invalid value|out of memory|cannot|failed|error|refus|killed", ln, re.I)
-             and not re.search(r"memory guard: (?:limit|the available)", ln, re.I)]
+             and not re.search(r"memory guard: (?:limit|the available)|\bno error\b", ln, re.I)]
     reason = " | ".join(lines[:3])[:300]
     if re.search(r"unknown argument|unrecognized (argument|option)", low):
         return "UNSUPPORTED", reason or "the engine does not accept one of the settings"
@@ -146,6 +146,16 @@ def failure_kind(text: str, returncode: int | None) -> tuple[str, str]:
     if re.search(r"out of memory|memory guard: (?:refus|not enough|too)|cannot allocate|std::bad_alloc|\boom\b|(?:^|\n)killed(?:\r?\n|$)", low) or returncode in (-9, 137, 3221226505):
         return "OOM", reason or "the engine ran out of memory"
     return "FAIL_BOOT", reason or f"the engine stopped while starting (exit {returncode})"
+
+
+_ENGINE_ADVICE = re.compile(r"(?:add|raise|use)\s+(--vram-reserve(?:-later)?-mib\s+\d+)[^\n]*", re.I)
+
+
+def engine_advice(log: str) -> str | None:
+    """The setting the engine itself suggested when it ran short of graphics memory ("LOW ... add --vram-reserve-later-mib 1300"),
+    from its log, or None."""
+    found = _ENGINE_ADVICE.findall(log)
+    return found[-1].strip() if found else None
 
 
 _REQUEST_OOM = re.compile(r"out of memory|cannot allocate|std::bad_alloc|\boom\b", re.I)
@@ -165,6 +175,8 @@ def request_failure(code: int, body: bytes) -> tuple[str, str]:
     message = str(message)[:200]
     if _REQUEST_OOM.search(message):
         return "OOM", f"the engine ran out of memory while answering ({message})"
+    if re.search(r"engine stopped unexpectedly|engine (?:crashed|exited|died)", message, re.I):
+        return "FAIL_BOOT", f"the engine crashed while starting or answering ({message})"
     return "NO_TOKENS", f"the worker refused the request ({code}): {message}"
 
 
@@ -359,6 +371,7 @@ class WorkerEngine:
                 data = json.loads(r.read())
         except urllib.error.HTTPError as e:
             status, why = request_failure(e.code, e.read())
+            status, why = self._from_engine_log(status, why)
             raise StartFailed(status, why) from None
         except (urllib.error.URLError, OSError, ValueError) as e:
             code = self.proc.poll()
@@ -366,6 +379,19 @@ class WorkerEngine:
             raise StartFailed(status, f"the engine did not answer: {why}") from None
         self._sample_mem()
         return data
+
+    def _from_engine_log(self, status: str, why: str) -> tuple[str, str]:
+        """The worker says only that the engine stopped (and guesses at RAM). What the engine itself logged before it did is the
+        reason: an out-of-memory in its log makes this an OOM, with the engine's own advice, so the report points at the right memory."""
+        if status != "FAIL_BOOT" or self.proc.poll() is None:
+            return status, why
+        tail = self.log_text()[-8000:]
+        kind, reason = failure_kind(tail, self.proc.poll())
+        if kind != "OOM":
+            return status, why
+        hint = engine_advice(self.log_text())
+        said = [ln.strip() for ln in tail.splitlines() if re.search(r"out of memory|cudaMalloc|bad_alloc", ln, re.I)]
+        return "OOM", f"the engine ran out of graphics memory ({said[-1] if said else reason})" + (f"; the engine suggested {hint}" if hint else "")
 
     # ---- measurements
     def decode_once(self, tune: dict[str, Any] | None = None, tokens: int = 200) -> float | None:

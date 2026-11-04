@@ -420,6 +420,9 @@ class Tuner:
                 # the app's existing wording for no_memory (close other programs) fits; the message adds the settings to lower
                 r.reason_code = "no_memory"
                 r.message = ("Not tuned: your current settings ran out of memory while being measured (" + (base1.reason or "OOM")
+                             + "). Add the reserve the engine suggested to this setup, or lower the context, or close other programs, "
+                             "then tune again." if "the engine suggested" in (base1.reason or "") else
+                             "Not tuned: your current settings ran out of memory while being measured (" + (base1.reason or "OOM")
                              + "). Close other programs, or lower the context or raise --vram-reserve-mib, then tune again.")
             else:
                 r.reason_code = "start_failed"

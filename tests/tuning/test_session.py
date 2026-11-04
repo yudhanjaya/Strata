@@ -109,6 +109,10 @@ class ParsingTest(unittest.TestCase):
         self.assertEqual(status, "NO_TOKENS")
         self.assertIn("(503): the engine is busy", why)
         self.assertEqual(request_failure(500, b"not json")[0], "NO_TOKENS")
+        status, why = request_failure(503, b'{"error": {"message": "the engine stopped unexpectedly (exit code -6); the next request restarts it"}}')
+        self.assertEqual(status, "FAIL_BOOT")
+        self.assertIn("crashed", why)
+        self.assertIn("exit code -6", why)
 
     def test_failure_kinds(self):
         self.assertEqual(failure_kind("error: unknown argument: --adapt-min-gain\nusage...", 2)[0], "UNSUPPORTED")
@@ -142,3 +146,46 @@ class ParsingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EngineLogCrashTest(unittest.TestCase):
+    """A worker that reports a dead engine says little; the engine's own log says why."""
+
+    LOG = ("strata serve: CUDA1: 168 MiB of VRAM free with everything loaded - LOW: its window graphs are captured on first use "
+           "and need room too; add --vram-reserve-later-mib 1300 to the config's args (or lower --max-context)\n"
+           "strata serve: prompt 76 tokens = 0 reused + 76 read in 647 ms\n"
+           "ggml-cuda (strata mmq): out of memory: cudaMalloc(&p, size)\n  in alloc at ggml_cuda_host.cu:127\n")
+
+    def engine(self, log: str, returncode):
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        f = Path(d.name) / "engine.log"
+        f.write_text(log)
+        proc = mock.Mock()
+        proc.poll.return_value = returncode
+        proc.pid = 1
+        with mock.patch("strata_control.tune_session.WorkerEngine._model_id"):
+            return WorkerEngine(mock.Mock(), proc, 1, "k", [f], 1.0, None, lambda s: None)
+
+    def test_a_crash_with_an_out_of_memory_in_the_log_is_an_oom_with_the_engines_advice(self):
+        status, why = self.engine(self.LOG, -6)._from_engine_log("FAIL_BOOT", "the engine crashed")
+        self.assertEqual(status, "OOM")
+        self.assertIn("graphics memory", why)
+        self.assertIn("the engine suggested --vram-reserve-later-mib 1300", why)
+        self.assertIn("cudaMalloc", why)                          # the engine's own line, not the "no error" capture messages
+        self.assertNotIn("no error", why)
+
+    def test_a_crash_without_it_stays_a_crash(self):
+        self.assertEqual(self.engine("strata serve: ready\n", -6)._from_engine_log("FAIL_BOOT", "the engine crashed"),
+                         ("FAIL_BOOT", "the engine crashed"))
+
+    def test_a_running_engine_is_not_judged_by_its_log(self):
+        self.assertEqual(self.engine(self.LOG, None)._from_engine_log("FAIL_BOOT", "x")[0], "FAIL_BOOT")
+
+    def test_the_advice_is_read_from_the_log(self):
+        from strata_control.tune_session import engine_advice
+        self.assertEqual(engine_advice(self.LOG), "--vram-reserve-later-mib 1300")
+        self.assertIsNone(engine_advice("nothing to suggest"))
