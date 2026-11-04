@@ -24,7 +24,7 @@ BACKENDS = ("metal", "cuda", "hip", "sycl", "cpu")
 from strata_control.doctor import inspect as inspect_components
 from strata_control.profiles import ProfileError
 from strata_cli.client import ClientError, Endpoint
-from strata_cli import monitor_commands, tune_commands
+from strata_cli import monitor_commands, tune_commands, tune_target
 
 
 class _VersionAction(argparse.Action):
@@ -2241,7 +2241,7 @@ def main(argv: list[str] | None = None) -> int:
         pass
     ap = parser()
     raw = list(sys.argv[1:] if argv is None else argv)
-    a, extras = ap.parse_known_args(_install_argv(raw))
+    a, extras = ap.parse_known_args(tune_target.rewrite_argv(_install_argv(raw)))
     a.raw_argv = raw
     if extras:
         if getattr(a, "command", None) in ("launch", "connect"):

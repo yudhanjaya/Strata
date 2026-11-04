@@ -120,6 +120,26 @@ tuning presets (`strata presets`), so the app sees them too.
 settings? Answers in progress stop." With `--no-tui` the command refuses with one line naming the running model, its port and settings. Add
 `--restart` or run `strata launch --stop` first. A different `--port` runs beside the first server; two big models may not fit in graphics memory together, and the launch says so.
 
+## Tuning a model: `strata tune`
+
+Tune a model you already set up by its name; nothing else is needed:
+
+```sh
+strata tune iq3_s --plan     # what it would try, what it would leave out and why, about how many runs; starts nothing
+strata tune iq3_s            # quick (about 20 minutes); add --mode thorough for up to 2 hours
+strata tune report           # the account of the last tune again; --markdown for a [Benchmark] issue
+```
+
+The name is an installed model (`strata models list`), a saved setup (`strata profile list`) or part of a name when only one fits. For
+a model with several saved setups (a context, cards, pictures) the one used last is tuned and the others are named; use the full name,
+for example `launch-iq3_s-dual`, to pick another. `strata tune auto <profile or JSON file>` and all its flags work as before, and so do
+they after a model name (`strata tune iq3_s --mode thorough --allow-small-differences`).
+
+A tune ends with a short account: what your settings measured, the gain a setting needed to count and the noise it had to beat, every
+setting tried with its verdict and why it did not count, what was left out, and one thing to do next. The same text is saved (private to
+you) in the `reports/` folder beside the saved presets. If the tune is stopped (Ctrl+C, a closed terminal) or fails, it still writes
+that result, nothing is changed, and the engine's logs of a failed run are kept.
+
 ## DeepSeek V4.1-Flash
 
 DeepSeek V4.1-Flash runs in the Terminal and in the app, on NVIDIA RTX 30, 40 and 50 (Windows and Linux) and on the Radeon AI PRO R9700 (Linux). Hardware, sizes and speeds are in [MODELS.md](MODELS.md#deepseek-v41-flash).

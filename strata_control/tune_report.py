@@ -143,6 +143,51 @@ def render(r: dict[str, Any], *, preset_name: str | None = None) -> str:
     return "\n".join(lines)
 
 
+_ANSWERS = {"exact": "answers unchanged", "placement": "answers may differ slightly", "nonrepeatable": "answers not repeatable",
+            "quality": "changes the numbers"}
+
+
+def render_plan(plan: dict[str, Any], pc: dict[str, Any] | None = None) -> str:
+    """What a tune would do on this PC, as text: nothing has been started and nothing has been changed."""
+    pc = pc or {}
+    lines = [f"Tune plan for {pc.get('model') or 'this setup'}  (nothing is started or changed)"]
+    for key, label in (("gpus", "Graphics"), ("ram", "Memory"), ("setup", "Setup")):
+        if pc.get(key):
+            lines.append(f"{label}: {pc[key]}")
+    tries = plan.get("will_try") or []
+    lines += ["", f"Mode: {plan.get('mode')} (a budget of about {plan.get('minutes')} min). It measures your current settings first, "
+                  + (f"then tries {len(tries)} setting{'s' if len(tries) != 1 else ''} in {plan.get('rounds')} rounds each: "
+                     f"about {plan.get('runs')} engine runs." if tries else
+                     "but this budget fits no other setting; use --mode thorough or --time." if any(
+                         x.get("kind") == "time" for x in plan.get("will_skip") or []) else
+                     "and no other setting is worth trying on this PC.")]
+    if tries:
+        lines.append(f"The time is a guess of about {plan.get('assumed_run_s'):.0f} s per run until the first one is timed; "
+                     "a large model starts slowly, so fewer settings may fit.")
+        lines += ["", "Will try:"]
+        width = max(len(t["label"]) for t in tries)
+        lines += [f"  {t['label']:<{width}}  ({_ANSWERS.get(t['answer'], t['answer'])})" for t in tries]
+    if plan.get("per_request"):
+        lines += ["", "Also, in the first run and without a restart: " + ", ".join(plan["per_request"]) + "."]
+    skipped = [x for x in plan.get("will_skip") or [] if x.get("kind") != "time"]
+    timed = [x for x in plan.get("will_skip") or [] if x.get("kind") == "time"]
+    if skipped or timed:
+        lines += ["", "Will not try:"]
+        short = {"placement": "can change answers slightly", "nonrepeatable": "answers would not repeat run to run"}
+        lines += [f"  {x.get('label') or x.get('id')}: {short.get(x.get('kind'), x.get('reason'))}" for x in skipped]
+        if timed:
+            lines.append(f"  {len(timed)} more, to stay inside the time (use --mode thorough or --time)")
+        un = unlockable({"skipped": plan.get("will_skip")})
+        if un.get("placement"):
+            lines.append(f"  -> {len(un['placement'])} would be tried with --allow-small-differences.")
+        if un.get("nonrepeatable"):
+            lines.append(f"  -> {len(un['nonrepeatable'])} would be tried with --allow-not-repeatable.")
+    if plan.get("estimate"):
+        lines += ["", "This plan is " + plan["estimate"] + "."]
+    lines += ["", "Start it by running the same command without --plan."]
+    return "\n".join(lines)
+
+
 def markdown(r: dict[str, Any], *, title: str = "Tuning report") -> str:
     """The same account as Markdown, to paste into a [Benchmark] issue. It carries no paths, keys or user names."""
     values = r.get("values") or {}

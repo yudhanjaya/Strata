@@ -903,6 +903,39 @@ def context_from_config(cfg: dict[str, Any], *, engine_backend: str | None, opts
         allow_nonrepeatable=opts.allow_nonrepeatable, engine_flags=engine_flags, base_args=args)
 
 
+# --------------------------------------------------------------------------- what a tune would do, before it does it
+
+def plan(ctx: tune_knobs.Context, opts: Options, *, history_bad: set[str] | None = None, run_s: float = 150.0) -> dict[str, Any]:
+    """What `Tuner.run` would try on this PC, without starting an engine: the settings it would measure, the ones it leaves out and
+    why, and how many engine runs that is. It is made before the first measurement, so what the engine's own log tells the tuner
+    afterwards (helper threads, the low-memory mode) can still add or remove a setting; ``estimate`` says so. ``run_s`` is the
+    run time the tuner assumes until it has timed one (a large model starts slowly, so the real figure is often higher)."""
+    o = opts.resolved()
+    planned, skipped = tune_knobs.plan_arms(ctx, mode=o.mode, history_bad=history_bad or set())
+    skipped = list(skipped)
+    per_arm = o.rounds or 2
+    if o.mode == "thorough":
+        fit = len(planned)
+    else:
+        left = int((o.budget_s - run_s) / max(1.0, run_s))             # the same sum `Tuner._run_stages` makes after the base run
+        fit = min(len(planned), max(0, (left - per_arm) // per_arm))
+    for p in planned[fit:]:
+        skipped.append({"id": p.arm.id, "label": p.arm.label, "reason": "left out to stay inside the time you chose", "kind": "time"})
+    planned = planned[:fit]
+    per_request = []
+    if o.per_request:
+        for spec in tune_knobs.PER_REQUEST:
+            if ctx.backend in spec["backends"] and (spec["answer"] == "exact" or tune_knobs.allowed(spec["answer"], ctx)):
+                per_request.append(spec["label"])
+    runs = per_arm * (len(planned) + 1) + 1 + (o.confirm_pairs or 0) * 2
+    return {"mode": o.mode, "minutes": round(o.budget_s / 60.0), "rounds": per_arm, "classes": tune_knobs.machine_classes(ctx),
+            "will_try": [{"id": p.arm.id, "label": p.arm.label, "answer": p.arm.answer,
+                          "changes": {**{k: v for k, v in p.args.items()}, **{k: v for k, v in p.env.items()}}} for p in planned],
+            "will_skip": skipped, "per_request": sorted(set(per_request)),
+            "runs": runs, "assumed_run_s": run_s,
+            "estimate": "made before the first measurement; the engine's own report of this PC can still add or remove a setting"}
+
+
 # --------------------------------------------------------------------------- the short "still good?" re-check (8.3)
 
 def recheck(session: Session, base_args: list[str], preset: dict[str, Any], *, ctx: tune_knobs.Context,

@@ -25,7 +25,8 @@ def add_tune_auto(tune_sp: argparse._SubParsersAction) -> None:
         description="Measures your configuration, tries single-knob changes in interleaved rounds against it, keeps only gains "
                     "above the noise, and saves the result as a named preset that is applied at every start. "
                     "Nothing changes if the current settings are already the fastest.")
-    p.add_argument("target", help="a saved profile name or a run configuration (JSON) to tune")
+    p.add_argument("target", help="what to tune: an installed model (iq3_s) or part of a saved setup's name (the one used last is "
+                                  "tuned), a saved profile name, or a run configuration (JSON)")
     p.add_argument("--mode", choices=("quick", "thorough"), default="quick",
                    help="quick: about 20 minutes. thorough: up to 2 hours, 5-pair confirmation (default quick)")
     p.add_argument("--goal", default="speed", help="speed (full performance), room (leave memory free), or room:MiB "
@@ -38,6 +39,9 @@ def add_tune_auto(tune_sp: argparse._SubParsersAction) -> None:
     p.add_argument("--name", default=None, help="the preset's name (default: model, context and your wish)")
     p.add_argument("--time", dest="minutes", type=float, default=None, help="time to spend, in minutes")
     p.add_argument("--no-save", action="store_true", help="measure and report, but do not save a preset")
+    p.add_argument("--plan", action="store_true",
+                   help="show what this tune would try on this PC, what it would leave out and why, and about how many runs it is; "
+                        "starts nothing and changes nothing")
     p.add_argument("--gpu-lock", default=os.environ.get("STRATA_TUNE_GPU_LOCK"),
                    help="a lock file held around every engine run (shared boxes)")
     p.add_argument("--no-quiet-check", action="store_true", help="do not wait for other engines or a busy CPU")
@@ -241,6 +245,45 @@ def _hw_hash(identity: dict[str, Any]) -> str:
 
 # --------------------------------------------------------------------------- tune auto
 
+def _resolve_target(target: str) -> tuple[str, str]:
+    """What `tune auto` is given: a path or an exact saved profile stays as it is; any other name is looked up as an installed
+    model or part of a saved setup's name (see tune_target). Returns (target, a line to tell the person or "")."""
+    from strata_cli import tune_target
+    from strata_control import profiles
+    try:
+        profiles.resolve(target)
+        return target, ""
+    except profiles.ProfileError:
+        if target in {item["id"] for item in profiles.list_profiles()}:
+            raise                                           # a profile that exists but cannot be read says so
+    choice = tune_target.resolve(target)
+    return choice.ref, choice.note
+
+
+def _pc_summary(cfg: dict[str, Any], ctx: Any) -> dict[str, Any]:
+    from strata_control import presets, tune_machine
+    cards = tune_machine.gpus()
+    wanted = cfg.get("gpu")
+    wanted = wanted if isinstance(wanted, list) else ([wanted] if isinstance(wanted, int) else None)
+    used = [g for g in cards if not wanted or g.get("index") in wanted] or cards
+    mem = tune_machine.memory()
+    out: dict[str, Any] = {"model": presets.choices_from_config(cfg).get("model")}
+    if used:
+        out["gpus"] = "; ".join(f"{g['name']} ({g['vram_total_mib'] / 1024:.0f} GB" + (f", {g['vram_used_mib'] / 1024:.1f} GB in use now" if g.get("vram_used_mib") else "") + ")" for g in used)
+    if mem.get("total_mib"):
+        out["ram"] = f"{mem['total_mib'] / 1024:.0f} GB, {(mem.get('available_mib') or 0) / 1024:.0f} GB free now; the model is about {ctx.model_gib:.0f} GB"
+    out["setup"] = f"{ctx.context_tokens // 1024}K context, {ctx.gpu_count} graphics card{'s' if ctx.gpu_count != 1 else ''}, backend {ctx.backend}"
+    return out
+
+
+def _plan_only(a: argparse.Namespace, cfg: dict[str, Any], ctx: Any, opts: Any, bad: set[str], machine: bool) -> int:
+    from strata_control import autotune, tune_report
+    plan = autotune.plan(ctx, opts, history_bad=bad)
+    pc = _pc_summary(cfg, ctx)
+    plan["pc"] = pc
+    return _print({"plan": plan}, machine, tune_report.render_plan(plan, pc))
+
+
 def auto(a: argparse.Namespace) -> int:
     from strata_control import autotune, engine_component, presets, tune_knobs, tune_machine, tuning
     from strata_control.tune_session import WorkerSession
@@ -248,6 +291,9 @@ def auto(a: argparse.Namespace) -> int:
     machine = a.output == "json"
     try:
         goal, reserve = _parse_goal(a.goal)
+        a.target, note = _resolve_target(a.target)
+        if note and not machine:
+            print(note, file=sys.stderr, flush=True)
         cfg_path, cfg = _load_target(a.target)
     except Exception as e:  # noqa: BLE001
         return _fail(str(e), getattr(e, "exit_code", 2), machine)
@@ -268,6 +314,16 @@ def auto(a: argparse.Namespace) -> int:
     hw = _hw_hash(identity)
     digest = (identity.get("model") or {}).get("sha256_shard1")
     bad = presets.bad_signatures(hw_hash=hw, model_digest=digest, engine_sha=(identity.get("engine") or {}).get("sha256"))
+
+    base_args = [str(x) for x in cfg.get("args") or []]
+    # the wish becomes part of the base: leave-room asks the engine for the reserve if the configuration has none yet
+    if goal == "room" and reserve and "--vram-reserve-mib" not in base_args and ctx.family == "flash-next" \
+            and backend in ("cuda", "hip") and (flags is None or "--vram-reserve-mib" in flags):
+        base_args += ["--vram-reserve-mib", str(reserve)]
+        ctx.base_args = list(base_args)
+
+    if a.plan:
+        return _plan_only(a, cfg, ctx, opts, bad, machine)
 
     cancel = threading.Event()
     state: dict[str, Any] = {"stage": "start", "message": "Starting", "state": "running"}
@@ -290,12 +346,6 @@ def auto(a: argparse.Namespace) -> int:
         atexit.register(shutil.rmtree, workdir, True)       # its own scratch folder goes with the run (--work-dir keeps the logs)
     session = WorkerSession(base_config=cfg, python=sys.executable, serve_dir=_serve_dir(a), workdir=workdir,
                             boot_timeout_s=a.boot_timeout, lock=_lock_factory(a, say), log=say)
-    base_args = [str(x) for x in cfg.get("args") or []]
-    # the wish becomes part of the base: leave-room asks the engine for the reserve if the configuration has none yet
-    if goal == "room" and reserve and "--vram-reserve-mib" not in base_args and ctx.family == "flash-next" \
-            and backend in ("cuda", "hip") and (flags is None or "--vram-reserve-mib" in flags):
-        base_args += ["--vram-reserve-mib", str(reserve)]
-        ctx.base_args = list(base_args)
     tuner = autotune.Tuner(session, base_args, dict(cfg.get("env") or {}), ctx, opts, progress=progress, cancel=cancel,
                            history_bad=bad, quiet=None)
     say(f"Tuning {presets.choices_from_config(cfg).get('model')} ({a.mode}); engine {exe}")

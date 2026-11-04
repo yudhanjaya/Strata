@@ -144,3 +144,30 @@ class ProgressTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlanTest(unittest.TestCase):
+    def test_the_plan_is_what_the_tuner_then_does(self):
+        for mode in ("quick", "thorough"):
+            opts = autotune.Options(mode=mode)
+            plan = autotune.plan(make_ctx(), opts)
+            t, s, r = run_tuner(speed_with({}), opts=autotune.Options(mode=mode))
+            self.assertEqual([x["id"] for x in plan["will_try"]], [a["id"] for a in r.arms], mode)
+
+    def test_a_plan_starts_no_engine_and_counts_the_runs(self):
+        plan = autotune.plan(make_ctx(), autotune.Options())
+        self.assertEqual(plan["runs"], plan["rounds"] * (len(plan["will_try"]) + 1) + 1)
+        self.assertEqual(plan["classes"], ["A", "C"])
+
+    def test_a_budget_that_fits_nothing_says_so_rather_than_nothing_is_worth_trying(self):
+        plan = autotune.plan(make_ctx(), autotune.Options(budget_s=200.0))
+        self.assertEqual(plan["will_try"], [])
+        text = tune_report.render_plan(plan)
+        self.assertIn("this budget fits no other setting", text)
+        self.assertNotIn("worth trying", text)
+
+    def test_the_text_names_what_will_be_tried_and_left_out(self):
+        text = tune_report.render_plan(autotune.plan(make_ctx(), autotune.Options()), {"model": "iq3 test", "gpus": "A card (12 GB)"})
+        for want in ("Tune plan for iq3 test", "nothing is started or changed", "Graphics: A card (12 GB)", "Will try:",
+                     "Keep more of the conversation", "Will not try:", "--allow-small-differences", "without --plan"):
+            self.assertIn(want, text)
