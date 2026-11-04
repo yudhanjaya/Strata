@@ -402,8 +402,14 @@ class Tuner:
             self._say("base", "Measured your current settings")
         if base1.status != "PASS" or not metric(base1, o.use):
             r.outcome = "base_failed"
-            r.reason_code = "start_failed"
-            r.message = "Your current settings could not be measured: " + (base1.reason or base1.status)
+            if base1.status == "OOM":
+                # the app's existing wording for no_memory (close other programs) fits; the message adds the settings to lower
+                r.reason_code = "no_memory"
+                r.message = ("Not tuned: your current settings ran out of memory while being measured (" + (base1.reason or "OOM")
+                             + "). Close other programs, or lower the context or raise --vram-reserve-mib, then tune again.")
+            else:
+                r.reason_code = "start_failed"
+                r.message = "Your current settings could not be measured: " + (base1.reason or base1.status)
             return
         r.base = base1.to_dict()
         r.facts = dict(base1.facts)

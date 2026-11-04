@@ -148,6 +148,35 @@ def _parse_goal(text: str) -> tuple[str, int]:
     raise ValueError("goal is speed, room or room:MiB")
 
 
+def _stop_on_signals() -> dict[int, Any]:
+    """Treat a terminated or hung-up terminal like Ctrl+C, so the run stops its engine and writes a result instead of
+    vanishing. Only the main thread can set handlers; elsewhere this does nothing."""
+    import signal
+
+    def stop(_signum: int, _frame: Any) -> None:
+        raise KeyboardInterrupt
+
+    previous: dict[int, Any] = {}
+    for name in ("SIGTERM", "SIGHUP"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            previous[sig] = signal.signal(sig, stop)
+        except ValueError:
+            pass
+    return previous
+
+
+def _restore_signals(previous: dict[int, Any]) -> None:
+    import signal
+    for sig, handler in previous.items():
+        try:
+            signal.signal(sig, handler)
+        except (ValueError, TypeError):
+            pass
+
+
 def _write_status(path: str | None, payload: dict[str, Any]) -> None:
     if not path:
         return
@@ -230,12 +259,22 @@ def auto(a: argparse.Namespace) -> int:
     tuner = autotune.Tuner(session, base_args, dict(cfg.get("env") or {}), ctx, opts, progress=progress, cancel=cancel,
                            history_bad=bad, quiet=None)
     say(f"Tuning {presets.choices_from_config(cfg).get('model')} ({a.mode}); engine {exe}")
+    previous_handlers = _stop_on_signals()
     try:
         result = tuner.run()
     except KeyboardInterrupt:
         cancel.set()
         result = tuner.result
         result.outcome, result.message = "cancelled", "Stopped. Your settings were not changed."
+    except Exception as e:  # noqa: BLE001 - whatever went wrong, the status file and the result must say so, not stay "running"
+        result = tuner.result
+        result.outcome, result.reason_code = "failed", "tuner_error"
+        result.message = f"The tuner stopped because of an error ({type(e).__name__}: {e}). Your settings were not changed."
+        if not a.work_dir:
+            atexit.unregister(shutil.rmtree)                 # keep the engine and worker logs of a run that failed
+            result.notes.append(f"The engine and worker logs of this run are in {workdir}")
+    finally:
+        _restore_signals(previous_handlers)
     out = result.to_dict()
     choices = presets.choices_from_config(cfg, use=a.use)
     choices["goal"], choices["reserve_mib"] = goal, reserve

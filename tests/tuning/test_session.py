@@ -98,6 +98,18 @@ class SessionTest(unittest.TestCase):
 
 
 class ParsingTest(unittest.TestCase):
+    def test_a_worker_error_is_read_out_of_its_json(self):
+        from strata_control.tune_session import request_failure
+        body = b'{"error": {"type": "invalid_request_error", "message": "verify: instantiate: out of memory"}}'
+        status, why = request_failure(400, body)
+        self.assertEqual(status, "OOM")
+        self.assertIn("verify: instantiate: out of memory", why)
+        self.assertNotIn("b'", why)
+        status, why = request_failure(503, b'{"error": {"message": "the engine is busy"}}')
+        self.assertEqual(status, "NO_TOKENS")
+        self.assertIn("(503): the engine is busy", why)
+        self.assertEqual(request_failure(500, b"not json")[0], "NO_TOKENS")
+
     def test_failure_kinds(self):
         self.assertEqual(failure_kind("error: unknown argument: --adapt-min-gain\nusage...", 2)[0], "UNSUPPORTED")
         self.assertEqual(failure_kind("native dense upload ... out of memory", 1)[0], "OOM")

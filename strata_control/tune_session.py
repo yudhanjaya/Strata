@@ -148,6 +148,26 @@ def failure_kind(text: str, returncode: int | None) -> tuple[str, str]:
     return "FAIL_BOOT", reason or f"the engine stopped while starting (exit {returncode})"
 
 
+_REQUEST_OOM = re.compile(r"out of memory|cannot allocate|std::bad_alloc|\boom\b", re.I)
+
+
+def request_failure(code: int, body: bytes) -> tuple[str, str]:
+    """Classify a worker that answered a measuring request with an error: (status, one plain line). The worker's own
+    message is read out of its JSON, not shown as raw bytes, and an out-of-memory answer is an OOM, which the tuner treats
+    differently from an engine that merely produced nothing."""
+    text = body.decode("utf-8", errors="replace").strip()
+    message = text
+    try:
+        err = json.loads(text).get("error")
+        message = (err.get("message") if isinstance(err, dict) else err) or text
+    except (ValueError, AttributeError):
+        pass
+    message = str(message)[:200]
+    if _REQUEST_OOM.search(message):
+        return "OOM", f"the engine ran out of memory while answering ({message})"
+    return "NO_TOKENS", f"the worker refused the request ({code}): {message}"
+
+
 # --------------------------------------------------------------------------- prompts
 
 _SENTENCES = (
@@ -338,7 +358,8 @@ class WorkerEngine:
             with loopback.urlopen(req, timeout=timeout) as r:
                 data = json.loads(r.read())
         except urllib.error.HTTPError as e:
-            raise StartFailed("NO_TOKENS", f"the worker refused the request ({e.code}): {e.read()[:200]!r}") from None
+            status, why = request_failure(e.code, e.read())
+            raise StartFailed(status, why) from None
         except (urllib.error.URLError, OSError, ValueError) as e:
             code = self.proc.poll()
             status, why = failure_kind(self.log_text()[-4000:], code) if code is not None else ("TIMEOUT", str(e))

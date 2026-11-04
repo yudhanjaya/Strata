@@ -420,6 +420,13 @@ class TunerTest(unittest.TestCase):
         self.assertEqual(r.outcome, "base_failed")
         self.assertEqual(len(s.runs), 1)
 
+    def test_base_that_runs_out_of_memory_says_so_and_what_to_lower(self):
+        t, s, r = run_tuner(speed_with({}), session_kw={"fail": lambda a, e: StartFailed("OOM", "verify: instantiate: out of memory")})
+        self.assertEqual((r.outcome, r.code, r.reason_code), ("base_failed", "failed", "no_memory"))
+        self.assertIn("ran out of memory", r.message)
+        self.assertIn("--vram-reserve-mib", r.message)
+        self.assertEqual(len(s.runs), 1)
+
     def test_coding_metric_uses_prompt_speed(self):
         m = autotune.metric({"decode_tok_s": 100.0, "pp_tok_s": 400.0}, "coding")
         self.assertAlmostEqual(m, 200.0)
